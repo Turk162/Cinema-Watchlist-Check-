@@ -1,0 +1,35 @@
+name: Cinema Watchlist Checker
+
+# Esegue ogni lunedì e venerdì alle 09:00
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Lunedì alle 9:00 UTC (11:00 Italia)
+    - cron: '0 9 * * 5'  # Venerdì alle 9:00 UTC (11:00 Italia)
+  
+  # Permette esecuzione manuale
+  workflow_dispatch:
+
+jobs:
+  check_cinema:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install requests feedparser beautifulsoup4
+    
+    - name: Run cinema checker
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        LETTERBOXD_RSS: ${{ secrets.LETTERBOXD_RSS }}
+      run: |
+        python cinema_checker.py

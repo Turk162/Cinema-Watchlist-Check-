@@ -106,21 +106,84 @@ class CinemaWatchlistChecker:
             print(f"❌ Error scraping watchlist: {e}")
             return []
     
-    def get_simple_roma_films(self):
-        """Versione semplificata per ottenere film romani"""
-        print("🎬 Getting Roma cinema films (simple version)...")
-        
-        # Lista film di test per debugging
-        test_films = [
-            {'title': 'Dune', 'source': 'test', 'cinema_info': {'search_url': 'test'}},
-            {'title': 'The Batman', 'source': 'test', 'cinema_info': {'search_url': 'test'}},
-            {'title': 'Spider-Man', 'source': 'test', 'cinema_info': {'search_url': 'test'}},
-            {'title': 'Avengers', 'source': 'test', 'cinema_info': {'search_url': 'test'}},
-            {'title': 'Inception', 'source': 'test', 'cinema_info': {'search_url': 'test'}}
+    def get_roma_cinema_films(self):
+        """Scrapa i film in programmazione a Roma da romatoday.it"""
+        all_films = []
+        roma_urls = [
+            'https://www.romatoday.it/eventi/cinema/',
+            'https://www.romatoday.it/eventi/tipo/cinema/'
         ]
         
-        print(f"🎭 Test films loaded: {len(test_films)}")
-        return test_films
+        for url in roma_urls:
+            try:
+                print(f"📡 Scraping {url}...")
+                
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                response = requests.get(url, headers=headers, timeout=15)
+                response.raise_for_status()
+                
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Pattern 1: Link con "cinema" o "film" 
+                cinema_links = soup.find_all('a', href=re.compile(r'(cinema|film)', re.I))
+                
+                for link in cinema_links:
+                    title_text = link.get_text(strip=True)
+                    if title_text and 5 < len(title_text) < 80:
+                        # Pulisci il titolo
+                        clean_title = re.sub(r'\s*-\s*.*$', '', title_text)
+                        clean_title = re.sub(r'\s*\(\d{4}\).*$', '', clean_title)
+                        clean_title = re.sub(r'\s*(al cinema|cinema|programmazione).*$', '', clean_title, flags=re.I)
+                        
+                        if len(clean_title) > 3 and clean_title not in [f['title'] for f in all_films]:
+                            all_films.append({
+                                'title': clean_title.strip(),
+                                'source': url,
+                                'cinema_info': {'search_url': url}
+                            })
+                
+                # Pattern 2: Titoli in h1, h2, h3
+                title_elements = soup.find_all(['h1', 'h2', 'h3', 'h4', 'strong'], string=re.compile(r'^[A-Za-z0-9À-ÿ\s\-:]+$'))
+                
+                for element in title_elements:
+                    title_text = element.get_text(strip=True)
+                    if title_text and 5 < len(title_text) < 80:
+                        skip_words = ['programmazione', 'eventi', 'roma', 'cinema', 'oggi', 'domani', 'festival']
+                        if not any(word in title_text.lower() for word in skip_words):
+                            clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title_text)
+                            
+                            if len(clean_title) > 3 and clean_title not in [f['title'] for f in all_films]:
+                                all_films.append({
+                                    'title': clean_title.strip(),
+                                    'source': url,
+                                    'cinema_info': {'search_url': url}
+                                })
+                
+                print(f"✅ Found {len([f for f in all_films if f['source'] == url])} films from this source")
+                
+            except Exception as e:
+                print(f"❌ Error scraping {url}: {e}")
+                continue
+        
+        # Rimuovi duplicati e limita
+        unique_films = []
+        seen_titles = set()
+        for film in all_films:
+            if film['title'] not in seen_titles and len(film['title']) > 3:
+                seen_titles.add(film['title'])
+                unique_films.append(film)
+        
+        final_films = unique_films[:50]  # Limita a 50 per performance
+        print(f"🎬 Total unique films from Roma: {len(final_films)}")
+        
+        # Mostra alcuni film trovati per debug
+        if final_films:
+            sample_titles = [f['title'] for f in final_films[:10]]
+            print(f"📋 Sample Roma films: {sample_titles}")
+        
+        return final_films
     
     def find_matches(self, watchlist_films, cinema_films):
         """Trova corrispondenze tra watchlist e cinema"""
@@ -171,19 +234,25 @@ class CinemaWatchlistChecker:
             return
             
         if not matches:
-            message = "🎭 Nessun film della tua watchlist trovato nei cinema di Roma (test debug)"
+            message = "🎭 Nessun film della tua watchlist è attualmente in programmazione a Roma"
         else:
-            message = f"🎬 FILM TROVATI! ({len(matches)} match - test debug)\n\n"
+            message = f"🎬 FILM TROVATI A ROMA! ({len(matches)} match)\n\n"
             
             for i, match in enumerate(matches, 1):
                 film = match['watchlist_film']['title']
                 score = match['match_score']
                 
-                message += f"{i}. 🎞️ {film}\n"
+                message += f"{i}. 🎞️ <b>{film}</b>\n"
                 message += f"   🎯 Match: {score:.0%}\n"
-                message += f"   📍 Test Cinema Roma\n\n"
+                message += f"   📍 RomaToday Cinema\n"
                 
-            message += f"🗓️ Test eseguito il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}"
+                # Link per cercare programmazione
+                search_query = film.replace(' ', '+')
+                google_search = f"https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+2025"
+                message += f"   🔍 <a href='{google_search}'>Cerca programmazione</a>\n"
+                message += f"   📰 <a href='https://www.romatoday.it/eventi/cinema/'>RomaToday Cinema</a>\n\n"
+                
+            message += f"🗓️ Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}"
             
         try:
             print("📤 Sending Telegram message...")
@@ -234,9 +303,9 @@ class CinemaWatchlistChecker:
                 self.send_telegram_notification([])
                 return
                 
-            # 2. Ottieni film in programmazione (versione test)
+            # 2. Ottieni film in programmazione (versione REALE)
             print("\n🎬 STEP 2: Getting cinema films...")
-            cinema_films = self.get_simple_roma_films()
+            cinema_films = self.get_roma_cinema_films()
             
             # 3. Trova corrispondenze
             print("\n🔍 STEP 3: Finding matches...")

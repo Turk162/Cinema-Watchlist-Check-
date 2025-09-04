@@ -119,22 +119,47 @@ class CinemaWatchlistChecker:
                 
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # Cerca i titoli dei film (pattern tipico di mymovies)
-                film_elements = soup.find_all(['h1', 'h2', 'h3'], string=re.compile(r'.+'))
-                film_links = soup.find_all('a', href=re.compile(r'/film/'))
+                # Cerca strutture più dettagliate per i film
+                film_containers = soup.find_all(['div', 'article', 'section'], class_=re.compile(r'film|movie|cinema', re.I))
                 
-                # Estrai i titoli dai link dei film
-                for link in film_links:
-                    if link.text.strip() and len(link.text.strip()) > 2:
-                        title = link.text.strip()
-                        # Pulisci il titolo
-                        clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title)
-                        if clean_title and clean_title not in [f['title'] for f in all_films]:
-                            all_films.append({
-                                'title': clean_title.strip(),
-                                'source': url,
-                                'url': link.get('href', '')
-                            })
+                for container in film_containers:
+                    # Cerca titoli e link nei container
+                    title_links = container.find_all('a', href=re.compile(r'/film/'))
+                    
+                    for link in title_links:
+                        if link.text.strip() and len(link.text.strip()) > 2:
+                            title = link.text.strip()
+                            clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title)
+                            
+                            # Cerca informazioni sui cinema vicino al titolo
+                            cinema_info = self.extract_cinema_info(container, url)
+                            
+                            if clean_title and not any(f['title'] == clean_title for f in all_films):
+                                film_data = {
+                                    'title': clean_title.strip(),
+                                    'source': url,
+                                    'film_url': link.get('href', ''),
+                                    'cinema_info': cinema_info
+                                }
+                                all_films.append(film_data)
+                
+                # Fallback: cerca tutti i link ai film
+                if not all_films or len([f for f in all_films if f['source'] == url]) < 5:
+                    film_links = soup.find_all('a', href=re.compile(r'/film/'))
+                    
+                    for link in film_links:
+                        if link.text.strip() and len(link.text.strip()) > 2:
+                            title = link.text.strip()
+                            clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title)
+                            
+                            if clean_title and not any(f['title'] == clean_title for f in all_films):
+                                film_data = {
+                                    'title': clean_title.strip(),
+                                    'source': url,
+                                    'film_url': link.get('href', ''),
+                                    'cinema_info': {'search_url': url}
+                                }
+                                all_films.append(film_data)
                             
                 print(f"✅ Found {len([f for f in all_films if f['source'] == url])} films from this source")
                 
@@ -144,6 +169,42 @@ class CinemaWatchlistChecker:
                 
         print(f"🎬 Total films in Roma cinemas: {len(all_films)}")
         return all_films
+    
+    def extract_cinema_info(self, container, source_url):
+        """Estrae informazioni sui cinema da un container HTML"""
+        cinema_info = {'search_url': source_url}
+        
+        try:
+            # Cerca nomi di cinema noti
+            cinema_patterns = [
+                r'UCI\s+\w+', r'The\s+Space\s+\w+', r'Cinema\s+\w+', r'Multisala\s+\w+',
+                r'Barberini', r'Adriano', r'Greenwich', r'Troisi', r'Giulio Cesare',
+                r'Nuovo Olimpia', r'Casa del Cinema', r'Palazzo Altemps'
+            ]
+            
+            text_content = container.get_text(' ', strip=True)
+            
+            for pattern in cinema_patterns:
+                matches = re.findall(pattern, text_content, re.IGNORECASE)
+                if matches:
+                    cinema_info['cinemas'] = list(set(matches))
+                    break
+            
+            # Cerca orari
+            time_pattern = r'\b\d{1,2}[:.]?\d{0,2}\b'
+            times = re.findall(time_pattern, text_content)
+            if times:
+                cinema_info['times'] = times[:5]  # Max 5 orari
+            
+            # Cerca link specifici ai cinema
+            cinema_links = container.find_all('a', href=re.compile(r'cinema|multisala|theatre', re.I))
+            if cinema_links:
+                cinema_info['cinema_links'] = [link.get('href') for link in cinema_links[:3]]
+                
+        except Exception as e:
+            print(f"Warning: Could not extract cinema info: {e}")
+            
+        return cinema_info
     
     def find_matches(self, watchlist_films, cinema_films):
         """Trova corrispondenze tra watchlist e cinema usando fuzzy matching"""
@@ -176,9 +237,17 @@ class CinemaWatchlistChecker:
                         'match_score': similarity,
                         'match_type': 'fuzzy'
                     })
-                    
-        print(f"🎯 Found {len(matches)} matches")
-        return matches
+        
+        # Rimuovi duplicati mantenendo il match con score più alto
+        unique_matches = {}
+        for match in matches:
+            film_title = match['watchlist_film']['title']
+            if film_title not in unique_matches or match['match_score'] > unique_matches[film_title]['match_score']:
+                unique_matches[film_title] = match
+        
+        final_matches = list(unique_matches.values())
+        print(f"🎯 Found {len(final_matches)} unique matches")
+        return final_matches
     
     def send_telegram_notification(self, matches):
         """Invia notifica Telegram con i match trovati"""
@@ -194,21 +263,49 @@ class CinemaWatchlistChecker:
             
             for i, match in enumerate(matches, 1):
                 film = match['watchlist_film']['title']
-                source = "Roma" if "versione-originale" not in match['cinema_film']['source'] else "Roma (V.O.)"
+                cinema_film = match['cinema_film']
+                source = "Roma (V.O.)" if "versione-originale" in cinema_film['source'] else "Roma"
                 score = match['match_score']
                 
-                message += f"{i}. 🎞️ {film}\n"
+                message += f"{i}. 🎞️ <b>{film}</b>\n"
                 message += f"   📍 {source}\n"
-                message += f"   🎯 Match: {score:.0%}\n\n"
+                message += f"   🎯 Match: {score:.0%}\n"
                 
-            message += f"🗓️ Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}"
+                # Aggiungi info sui cinema se disponibili
+                cinema_info = cinema_film.get('cinema_info', {})
+                
+                if cinema_info.get('cinemas'):
+                    cinemas_list = ', '.join(cinema_info['cinemas'][:3])  # Max 3 cinema
+                    message += f"   🏛️ Cinema: {cinemas_list}\n"
+                
+                if cinema_info.get('times'):
+                    times_list = ', '.join(cinema_info['times'][:3])  # Max 3 orari
+                    message += f"   🕐 Orari: {times_list}\n"
+                
+                # Link per cercare programmazioni dettagliate
+                search_query = film.replace(' ', '+')
+                search_url = f"https://www.google.com/search?q={search_query}+cinema+Roma+programmazione"
+                message += f"   🔍 <a href='{search_url}'>Cerca programmazione</a>\n"
+                
+                # Link diretto se disponibile
+                if cinema_film.get('film_url') and cinema_film['film_url'].startswith('http'):
+                    message += f"   🎬 <a href='{cinema_film['film_url']}'>Dettagli film</a>\n"
+                elif cinema_film.get('film_url'):
+                    full_url = f"https://www.mymovies.it{cinema_film['film_url']}"
+                    message += f"   🎬 <a href='{full_url}'>Dettagli film</a>\n"
+                
+                message += "\n"
+                
+            message += f"🗓️ Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}\n"
+            message += f"💡 <i>Clicca i link per dettagli su cinema e orari</i>"
             
         try:
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
             payload = {
                 'chat_id': self.telegram_chat_id,
                 'text': message,
-                'parse_mode': 'HTML'
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': True
             }
             response = requests.post(url, json=payload)
             response.raise_for_status()
@@ -230,11 +327,30 @@ class CinemaWatchlistChecker:
             print(f"✅ Trovati {len(matches)} film in programmazione:")
             for i, match in enumerate(matches, 1):
                 film = match['watchlist_film']['title']
-                source = "Roma" if "versione-originale" not in match['cinema_film']['source'] else "Roma (V.O.)"
+                cinema_film = match['cinema_film']
+                source = "Roma (V.O.)" if "versione-originale" in cinema_film['source'] else "Roma"
                 score = match['match_score']
+                
                 print(f"\n{i}. {film}")
                 print(f"   Programmato a: {source}")
                 print(f"   Accuratezza match: {score:.0%}")
+                
+                # Mostra info sui cinema se disponibili
+                cinema_info = cinema_film.get('cinema_info', {})
+                
+                if cinema_info.get('cinemas'):
+                    cinemas_list = ', '.join(cinema_info['cinemas'][:3])
+                    print(f"   Cinema: {cinemas_list}")
+                
+                if cinema_info.get('times'):
+                    times_list = ', '.join(cinema_info['times'][:3])
+                    print(f"   Orari: {times_list}")
+                
+                if cinema_film.get('film_url'):
+                    if cinema_film['film_url'].startswith('http'):
+                        print(f"   URL: {cinema_film['film_url']}")
+                    else:
+                        print(f"   URL: https://www.mymovies.it{cinema_film['film_url']}")
                 
         print(f"\n🕒 Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
         print("="*50)

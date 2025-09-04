@@ -27,28 +27,80 @@ class CinemaWatchlistChecker:
         ]
         
     def get_watchlist_films(self):
-        """Estrae i film dalla watchlist Letterboxd via RSS"""
+        """Estrae i film dalla watchlist Letterboxd via RSS o web scraping"""
+        # Prova prima con RSS
         try:
-            print("📡 Downloading Letterboxd watchlist...")
+            print("📡 Trying RSS feed...")
             feed = feedparser.parse(self.letterboxd_rss)
             
+            if feed.entries:
+                films = []
+                for entry in feed.entries:
+                    title = entry.title
+                    # Rimuovi rating e anno per ottenere solo il titolo
+                    clean_title = re.sub(r'\s*,\s*\d{4}\s*-\s*[★½]*.*$', '', title)
+                    clean_title = re.sub(r'\s+\(\d{4}\).*$', '', clean_title)
+                    
+                    # Controlla se è dalla watchlist (non ha rating)
+                    if '★' not in title:  # Film senza rating = in watchlist
+                        films.append({
+                            'title': clean_title.strip(),
+                            'original_title': title,
+                            'url': entry.link if hasattr(entry, 'link') else ''
+                        })
+                        
+                if films:
+                    print(f"✅ Found {len(films)} films in RSS watchlist")
+                    return films
+                    
+        except Exception as e:
+            print(f"⚠️ RSS failed: {e}")
+        
+        # Se RSS fallisce, prova web scraping
+        print("📡 Trying web scraping...")
+        return self.get_watchlist_from_web()
+    
+    def get_watchlist_from_web(self):
+        """Scrapa la watchlist direttamente dalla pagina web"""
+        try:
+            username = self.letterboxd_rss.split('/')[-3] if 'letterboxd.com' in self.letterboxd_rss else 'guidaccio'
+            watchlist_url = f"https://letterboxd.com/{username}/watchlist/"
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(watchlist_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
             films = []
-            for entry in feed.entries:
-                # Il titolo del film è nel title del feed
-                title = entry.title
-                # Rimuovi anno e info extra
-                clean_title = re.sub(r'\s+\(\d{4}\).*$', '', title)
-                films.append({
-                    'title': clean_title.strip(),
-                    'original_title': title,
-                    'url': entry.link if hasattr(entry, 'link') else ''
-                })
-                
-            print(f"✅ Found {len(films)} films in watchlist")
-            return films
+            
+            # Cerca i poster dei film (pattern tipico di Letterboxd)
+            for img in soup.find_all('img', alt=True):
+                alt_text = img.get('alt', '')
+                if alt_text and alt_text != 'Poster':
+                    # Pulisci il titolo dall'alt text
+                    clean_title = re.sub(r'\s+\(\d{4}\).*$', '', alt_text)
+                    if clean_title and len(clean_title) > 1:
+                        films.append({
+                            'title': clean_title.strip(),
+                            'original_title': alt_text,
+                            'url': watchlist_url
+                        })
+            
+            # Rimuovi duplicati
+            seen = set()
+            unique_films = []
+            for film in films:
+                if film['title'] not in seen:
+                    seen.add(film['title'])
+                    unique_films.append(film)
+            
+            print(f"✅ Found {len(unique_films)} films via web scraping")
+            return unique_films[:50]  # Limita a 50 per sicurezza
             
         except Exception as e:
-            print(f"❌ Error getting watchlist: {e}")
+            print(f"❌ Error scraping watchlist: {e}")
             return []
     
     def get_roma_cinema_films(self):

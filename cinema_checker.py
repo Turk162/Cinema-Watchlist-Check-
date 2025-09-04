@@ -107,83 +107,185 @@ class CinemaWatchlistChecker:
             return []
     
     def get_roma_cinema_films(self):
-        """Scrapa i film in programmazione a Roma da romatoday.it"""
+        """Scrapa i film in programmazione a Roma da ComingSoon.it"""
         all_films = []
-        roma_urls = [
-            'https://www.romatoday.it/eventi/cinema/',
-            'https://www.romatoday.it/eventi/tipo/cinema/'
+        
+        # ComingSoon.it - fonte principale
+        cinema_sources = [
+            'https://www.comingsoon.it/cinema/roma/',
+            'https://www.comingsoon.it/cinema/roma/versione-originale/',  # Se esiste
         ]
         
-        for url in roma_urls:
+        for url in cinema_sources:
             try:
                 print(f"📡 Scraping {url}...")
                 
+                # Headers per ComingSoon.it
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Referer': 'https://www.comingsoon.it/',
                 }
-                response = requests.get(url, headers=headers, timeout=15)
+                
+                response = requests.get(url, headers=headers, timeout=20)
                 response.raise_for_status()
                 
                 soup = BeautifulSoup(response.content, 'html.parser')
+                films_from_source = self.extract_comingsoon_films(soup, url)
                 
-                # Pattern 1: Link con "cinema" o "film" 
-                cinema_links = soup.find_all('a', href=re.compile(r'(cinema|film)', re.I))
+                print(f"✅ Found {len(films_from_source)} films from {url}")
+                all_films.extend(films_from_source)
                 
-                for link in cinema_links:
-                    title_text = link.get_text(strip=True)
-                    if title_text and 5 < len(title_text) < 80:
-                        # Pulisci il titolo
-                        clean_title = re.sub(r'\s*-\s*.*$', '', title_text)
-                        clean_title = re.sub(r'\s*\(\d{4}\).*$', '', clean_title)
-                        clean_title = re.sub(r'\s*(al cinema|cinema|programmazione).*$', '', clean_title, flags=re.I)
-                        
-                        if len(clean_title) > 3 and clean_title not in [f['title'] for f in all_films]:
-                            all_films.append({
-                                'title': clean_title.strip(),
-                                'source': url,
-                                'cinema_info': {'search_url': url}
-                            })
-                
-                # Pattern 2: Titoli in h1, h2, h3
-                title_elements = soup.find_all(['h1', 'h2', 'h3', 'h4', 'strong'], string=re.compile(r'^[A-Za-z0-9À-ÿ\s\-:]+$'))
-                
-                for element in title_elements:
-                    title_text = element.get_text(strip=True)
-                    if title_text and 5 < len(title_text) < 80:
-                        skip_words = ['programmazione', 'eventi', 'roma', 'cinema', 'oggi', 'domani', 'festival']
-                        if not any(word in title_text.lower() for word in skip_words):
-                            clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title_text)
-                            
-                            if len(clean_title) > 3 and clean_title not in [f['title'] for f in all_films]:
-                                all_films.append({
-                                    'title': clean_title.strip(),
-                                    'source': url,
-                                    'cinema_info': {'search_url': url}
-                                })
-                
-                print(f"✅ Found {len([f for f in all_films if f['source'] == url])} films from this source")
-                
+            except requests.exceptions.RequestException as e:
+                print(f"❌ Network error scraping {url}: {e}")
+                continue
             except Exception as e:
                 print(f"❌ Error scraping {url}: {e}")
                 continue
         
-        # Rimuovi duplicati e limita
+        # Rimuovi duplicati
         unique_films = []
         seen_titles = set()
         for film in all_films:
-            if film['title'] not in seen_titles and len(film['title']) > 3:
+            if film['title'] not in seen_titles and len(film['title']) > 2:
                 seen_titles.add(film['title'])
                 unique_films.append(film)
         
-        final_films = unique_films[:50]  # Limita a 50 per performance
-        print(f"🎬 Total unique films from Roma: {len(final_films)}")
+        final_films = unique_films[:150]  # ComingSoon ha molti film
+        print(f"🎬 Total unique films from Roma (ComingSoon): {len(final_films)}")
         
         # Mostra alcuni film trovati per debug
         if final_films:
-            sample_titles = [f['title'] for f in final_films[:10]]
+            sample_titles = [f['title'] for f in final_films[:20]]
             print(f"📋 Sample Roma films: {sample_titles}")
+        else:
+            print("⚠️ No films found - trying fallback extraction methods...")
+            # Se nessun film trovato, prova metodi più generici
+            all_films = self.extract_generic_films_comingsoon(soup, cinema_sources[0])
+            if all_films:
+                print(f"📋 Fallback found {len(all_films)} films")
+                return all_films[:50]
         
         return final_films
+    
+    def extract_comingsoon_films(self, soup, source_url):
+        """Estrae film specificamente da ComingSoon.it"""
+        films = []
+        
+        try:
+            # Pattern 1: Cerca link ai film (ComingSoon ha structure tipica)
+            film_links = soup.find_all('a', href=re.compile(r'(/film/|/cinema/)', re.I))
+            
+            for link in film_links:
+                title_text = link.get_text(strip=True)
+                href = link.get('href', '')
+                
+                if title_text and len(title_text) > 3 and len(title_text) < 100:
+                    # Evita link di navigazione
+                    skip_words = ['home', 'contatti', 'cinema', 'orari', 'prezzi', 'info', 'roma', 'tutti i film']
+                    if not any(word in title_text.lower() for word in skip_words):
+                        # Pulisci il titolo
+                        clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title_text)
+                        clean_title = re.sub(r'\s*-\s*.*$', '', clean_title)
+                        clean_title = re.sub(r'\s*(al cinema|cinema|trailer|recensione).*$', '', clean_title, flags=re.I)
+                        
+                        if len(clean_title) > 3:
+                            # Crea URL completo se necessario
+                            film_url = href if href.startswith('http') else f"https://www.comingsoon.it{href}"
+                            
+                            films.append({
+                                'title': clean_title.strip(),
+                                'source': source_url,
+                                'cinema_info': {
+                                    'search_url': source_url,
+                                    'film_url': film_url,
+                                    'source_name': 'ComingSoon'
+                                }
+                            })
+            
+            # Pattern 2: Cerca in elementi specifici per film
+            film_containers = soup.find_all(['div', 'article', 'section'], class_=re.compile(r'(film|movie|title)', re.I))
+            
+            for container in film_containers:
+                title_text = container.get_text(strip=True)
+                if title_text and 5 < len(title_text) < 80:
+                    clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title_text)
+                    clean_title = re.sub(r'\s*-\s*.*$', '', clean_title)
+                    
+                    if len(clean_title) > 3:
+                        films.append({
+                            'title': clean_title.strip(),
+                            'source': source_url,
+                            'cinema_info': {
+                                'search_url': source_url,
+                                'source_name': 'ComingSoon'
+                            }
+                        })
+            
+            # Pattern 3: Cerca nei tag title e h1-h3
+            title_elements = soup.find_all(['h1', 'h2', 'h3', 'h4'], string=re.compile(r'^[A-Za-z0-9À-ÿ\s\-:\.]+$'))
+            
+            for element in title_elements:
+                title_text = element.get_text(strip=True)
+                if title_text and 5 < len(title_text) < 100:
+                    skip_words = ['programmazione', 'cinema', 'roma', 'orari', 'coming soon', 'film', 'oggi']
+                    if not any(word in title_text.lower() for word in skip_words):
+                        clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title_text)
+                        
+                        if len(clean_title) > 3:
+                            films.append({
+                                'title': clean_title.strip(),
+                                'source': source_url,
+                                'cinema_info': {
+                                    'search_url': source_url,
+                                    'source_name': 'ComingSoon'
+                                }
+                            })
+                            
+        except Exception as e:
+            print(f"Error extracting from ComingSoon: {e}")
+        
+        return films
+    
+    def extract_generic_films_comingsoon(self, soup, source_url):
+        """Metodo fallback per estrarre film da ComingSoon"""
+        films = []
+        
+        try:
+            # Cerca tutti i link che potrebbero essere film
+            all_links = soup.find_all('a', href=True)
+            
+            for link in all_links:
+                title_text = link.get_text(strip=True)
+                href = link.get('href', '')
+                
+                # Filtri più permissivi per fallback
+                if title_text and 4 < len(title_text) < 120:
+                    # Lista più specifica di parole da evitare
+                    skip_words = ['home', 'contatti', 'privacy', 'cookie', 'login', 'registrati', 'newsletter', 'pubblicità']
+                    if not any(word in title_text.lower() for word in skip_words):
+                        clean_title = re.sub(r'\s*\(\d{4}\).*$', '', title_text)
+                        clean_title = re.sub(r'\s*[–—]\s*.*$', '', clean_title)  # Remove em/en dashes and everything after
+                        
+                        if len(clean_title) > 3:
+                            films.append({
+                                'title': clean_title.strip(),
+                                'source': source_url,
+                                'cinema_info': {
+                                    'search_url': source_url,
+                                    'source_name': 'ComingSoon (Fallback)'
+                                }
+                            })
+                            
+        except Exception as e:
+            print(f"Error in generic extraction: {e}")
+        
+        return films[:100]  # Limita per sicurezza
     
     def find_matches(self, watchlist_films, cinema_films):
         """Trova corrispondenze tra watchlist e cinema"""

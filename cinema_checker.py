@@ -346,13 +346,12 @@ class CinemaWatchlistChecker:
                 
                 message += f"{i}. 🎞️ <b>{film}</b>\n"
                 message += f"   🎯 Match: {score:.0%}\n"
-                message += f"   📍 RomaToday Cinema\n"
+                message += f"   📍 ComingSoon Cinema\n"
                 
-                # Link per cercare programmazione
+                # Solo link Google per cercare programmazione
                 search_query = film.replace(' ', '+')
-                google_search = f"https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+2025"
-                message += f"   🔍 <a href='{google_search}'>Cerca programmazione</a>\n"
-                message += f"   📰 <a href='https://www.romatoday.it/eventi/cinema/'>RomaToday Cinema</a>\n\n"
+                google_search = f"https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+orari+2025"
+                message += f"   🔍 <a href='{google_search}'>Cerca programmazione</a>\n\n"
                 
             message += f"🗓️ Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}"
             

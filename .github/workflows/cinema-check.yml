@@ -3,9 +3,8 @@ name: Cinema Watchlist Checker
 # Esegue ogni lunedì e venerdì alle 09:00
 on:
   schedule:
-    - cron: '0 9 * * 1'  # Lunedì alle 9:00 UTC (11:00 Italia)
-    - cron: '0 9 * * 5'  # Venerdì alle 9:00 UTC (11:00 Italia)
-  
+    - cron: '0 9 * * 3'  # Mercoledì alle 9:00 UTC (11:00 Italia)
+
   # Permette esecuzione manuale
   workflow_dispatch:
 

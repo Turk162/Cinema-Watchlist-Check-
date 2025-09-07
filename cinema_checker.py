@@ -1,145 +1,350 @@
 #!/usr/bin/env python3
 """
-Script debug semplificato per testare lo scraping di ComingSoon.it
-Cerca solo due film specifici: "Warfare" e "I roses"
+Script per controllare se i film della watchlist Letterboxd
+sono in programmazione nei cinema di Roma
 """
 import requests
+import feedparser
+import re
 from bs4 import BeautifulSoup
 import difflib
+from datetime import datetime
+import os
+import string
 
-def debug_comingsoon_scraping():
-    """Debug dello scraping di ComingSoon.it"""
+class CinemaWatchlistChecker:
+    def __init__(self):
+        print("Initializing CinemaWatchlistChecker...")
+        
+        # Configurazione Telegram
+        self.telegram_bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
+        self.telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+        
+        print(f"Telegram configured: {bool(self.telegram_bot_token and self.telegram_chat_id)}")
+        
+        # URL configurabili
+        self.letterboxd_rss = os.environ.get('LETTERBOXD_RSS', 
+            'https://letterboxd.com/Guidaccio/rss/')
+        
+        print(f"Letterboxd RSS: {self.letterboxd_rss}")
+        
+    def get_watchlist_films(self):
+        """Per test, usa una lista hardcoded di film"""
+        # Lista di test con film che sappiamo essere in sala
+        test_films = [
+            {'title': 'Warfare', 'original_title': 'Warfare', 'alternative_titles': [], 'url': ''},
+            {'title': 'I roses', 'original_title': 'I roses', 'alternative_titles': [], 'url': ''},
+            {'title': 'Enzo', 'original_title': 'Enzo', 'alternative_titles': [], 'url': ''},
+            {'title': 'Harry Potter e il calice di fuoco', 'original_title': 'Harry Potter e il calice di fuoco', 'alternative_titles': [], 'url': ''},
+            {'title': 'Kneecap', 'original_title': 'Kneecap', 'alternative_titles': [], 'url': ''}
+        ]
+        
+        print(f"Using test films: {[f['title'] for f in test_films]}")
+        return test_films
     
-    # Film che stiamo cercando
-    target_films = ["Warfare", "I roses"]
+    def get_roma_cinema_films(self):
+        """Scrapa i film in programmazione a Roma da ComingSoon.it"""
+        all_films = []
+        
+        url = 'https://www.comingsoon.it/cinema/roma/'
+        
+        try:
+            print(f"Scraping {url}...")
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8',
+                'Referer': 'https://www.comingsoon.it/',
+            }
+            
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            films_from_source = self.extract_comingsoon_films(soup, url)
+            
+            print(f"Found {len(films_from_source)} films from ComingSoon")
+            all_films.extend(films_from_source)
+                
+        except Exception as e:
+            print(f"Error scraping {url}: {e}")
+        
+        print(f"Total films from Roma: {len(all_films)}")
+        
+        if all_films:
+            sample_titles = [f['title'] for f in all_films[:20]]
+            print(f"Sample Roma films: {sample_titles}")
+        
+        return all_films
+
+    def extract_comingsoon_films(self, soup, source_url):
+        """Estrae film specificamente da ComingSoon.it usando il metodo che funziona"""
+        films = []
+        
+        try:
+            print("Extracting films from ComingSoon...")
+            
+            # Usa il metodo che ha funzionato nel debug: container specifici
+            film_containers = soup.find_all('div', class_='header-scheda streaming min no-bg container-fluid pbm')
+            
+            print(f"Found {len(film_containers)} film containers")
+            
+            for container in film_containers:
+                try:
+                    # Cerca il titolo nel link con classe "tit_olo h1"
+                    title_link = container.find('a', class_='tit_olo h1')
+                    
+                    if title_link:
+                        film_title = title_link.get_text(strip=True)
+                        
+                        if len(film_title) > 3 and len(film_title) < 200:
+                            # Ottieni URL del film se disponibile
+                            film_url = title_link.get('href', '') if title_link else ''
+                            if film_url and not film_url.startswith('http'):
+                                film_url = 'https://www.comingsoon.it' + film_url
+                            
+                            films.append({
+                                'title': film_title,
+                                'source': source_url,
+                                'cinema_info': {
+                                    'search_url': source_url,
+                                    'source_name': 'ComingSoon',
+                                    'film_url': film_url
+                                }
+                            })
+                            
+                            print(f"  Found film: {film_title}")
+                            
+                except Exception as e:
+                    print(f"Error processing film container: {e}")
+                    continue
+            
+        except Exception as e:
+            print(f"Error extracting from ComingSoon: {e}")
+        
+        print(f"Total films extracted: {len(films)}")
+        return films
     
-    print("=== DEBUG COMINGSOON SCRAPING ===")
-    print(f"Cerco questi film: {target_films}")
-    print()
+    def find_matches(self, watchlist_films, cinema_films):
+        """Trova corrispondenze con matching migliorato"""
+        matches = []
+        
+        print("Looking for matches with improved matching...")
+        print(f"Watchlist has {len(watchlist_films)} films")
+        print(f"Cinema has {len(cinema_films)} films")
+        
+        for watchlist_film in watchlist_films:
+            if not isinstance(watchlist_film, dict):
+                continue
+                
+            film_display_name = watchlist_film['title']
+            print(f"\nChecking '{film_display_name}'...")
+            
+            best_match = None
+            best_score = 0
+            
+            for cinema_film in cinema_films:
+                cinema_title = cinema_film['title']
+                
+                # METODO 1: Matching esatto (case insensitive)
+                if film_display_name.lower().strip() == cinema_title.lower().strip():
+                    match_score = 1.0
+                    print(f"  EXACT MATCH: '{film_display_name}' = '{cinema_title}'")
+                    
+                # METODO 2: Watchlist title contenuto nel cinema title
+                elif film_display_name.lower().strip() in cinema_title.lower().strip():
+                    match_score = 0.9
+                    print(f"  CONTAINED MATCH: '{film_display_name}' in '{cinema_title}'")
+                    
+                # METODO 3: Cinema title contenuto nel watchlist title  
+                elif cinema_title.lower().strip() in film_display_name.lower().strip():
+                    match_score = 0.85
+                    print(f"  REVERSE CONTAINED: '{cinema_title}' in '{film_display_name}'")
+                    
+                # METODO 4: Matching avanzato
+                else:
+                    match_score = self.advanced_title_matching(film_display_name, cinema_title)
+                    if match_score > 0.7:  # Soglia per il matching avanzato
+                        print(f"  ADVANCED MATCH: '{film_display_name}' ~ '{cinema_title}' ({match_score:.0%})")
+                
+                # Aggiorna il best match se questo è migliore
+                if match_score > best_score and match_score > 0.7:  # Soglia minima
+                    best_match = {
+                        'watchlist_film': {
+                            'title': film_display_name,
+                            'original_title': watchlist_film.get('original_title', film_display_name),
+                            'url': watchlist_film.get('url', '')
+                        },
+                        'cinema_film': cinema_film,
+                        'match_score': match_score,
+                        'match_type': 'exact' if match_score == 1.0 else 'partial'
+                    }
+                    best_score = match_score
+            
+            if best_match:
+                matches.append(best_match)
+                print(f"  BEST MATCH for '{film_display_name}': {best_match['cinema_film']['title']} ({best_score:.0%})")
+            else:
+                print(f"  NO MATCH found for '{film_display_name}'")
+        
+        print(f"\nTotal matches found: {len(matches)}")
+        return matches
     
-    url = 'https://www.comingsoon.it/cinema/roma/'
+    def advanced_title_matching(self, title1, title2):
+        """Matching avanzato per gestire titoli inglese/italiano"""
+        norm1 = self.normalize_title(title1)
+        norm2 = self.normalize_title(title2)
+        
+        # Prova diversi metodi di matching
+        base_score = difflib.SequenceMatcher(None, norm1, norm2).ratio()
+        clean_score = difflib.SequenceMatcher(None, self.remove_articles(norm1), self.remove_articles(norm2)).ratio()
+        keyword_score = self.keyword_matching(norm1, norm2)
+        
+        return max(base_score, clean_score, keyword_score)
     
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8',
-        'Referer': 'https://www.comingsoon.it/',
-    }
+    def normalize_title(self, title):
+        """Normalizza il titolo per il matching"""
+        normalized = title.lower().strip()
+        normalized = normalized.translate(str.maketrans('', '', string.punctuation))
+        normalized = re.sub(r'\s+', ' ', normalized)
+        return normalized
     
-    try:
-        print(f"Scarico: {url}")
-        response = requests.get(url, headers=headers, timeout=20)
-        response.raise_for_status()
-        print(f"Status: {response.status_code}")
-        print(f"Content length: {len(response.content)} bytes")
-        print()
+    def remove_articles(self, title):
+        """Rimuove articoli e parole comuni"""
+        articles = ['the', 'a', 'an', 'il', 'la', 'lo', 'i', 'le', 'gli', 'un', 'una', 'uno']
+        words = title.split()
+        filtered_words = [word for word in words if word not in articles]
+        return ' '.join(filtered_words)
+    
+    def keyword_matching(self, title1, title2):
+        """Matching basato su parole chiave comuni"""
+        words1 = {w for w in title1.split() if len(w) > 2}
+        words2 = {w for w in title2.split() if len(w) > 2}
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        if not words1 or not words2:
+            return 0
         
-        # METODO 1: Cerca con la struttura HTML specifica
-        print("=== METODO 1: Struttura HTML specifica ===")
-        film_containers = soup.find_all('div', class_='header-scheda streaming min no-bg container-fluid pbm')
-        print(f"Container trovati: {len(film_containers)}")
+        common_words = words1.intersection(words2)
+        if not common_words:
+            return 0
         
-        films_method1 = []
-        for i, container in enumerate(film_containers):
-            title_link = container.find('a', class_='tit_olo h1')
-            if title_link:
-                title = title_link.get_text(strip=True)
-                films_method1.append(title)
-                print(f"  {i+1}. {title}")
+        return len(common_words) / max(len(words1), len(words2))
+    
+    def send_telegram_notification(self, matches):
+        """Invia notifica Telegram"""
+        print("Preparing Telegram notification...")
         
-        print(f"Totale film metodo 1: {len(films_method1)}")
-        print()
-        
-        # METODO 2: Cerca tutti gli H1, H2, H3
-        print("=== METODO 2: Tutti gli heading ===")
-        films_method2 = []
-        for tag in ['h1', 'h2', 'h3']:
-            headings = soup.find_all(tag)
-            print(f"Tag {tag.upper()}: {len(headings)} trovati")
-            for heading in headings[:10]:  # Mostra solo primi 10
-                text = heading.get_text(strip=True)
-                if text and 3 < len(text) < 100:
-                    films_method2.append(text)
-                    print(f"  - {text}")
-        
-        print(f"Totale film metodo 2: {len(films_method2)}")
-        print()
-        
-        # METODO 3: Cerca tutti i link con "/film/" 
-        print("=== METODO 3: Link con /film/ ===")
-        film_links = soup.find_all('a', href=lambda href: href and '/film/' in href)
-        print(f"Link /film/ trovati: {len(film_links)}")
-        
-        films_method3 = []
-        for link in film_links[:20]:  # Mostra solo primi 20
-            text = link.get_text(strip=True)
-            href = link.get('href', '')
-            if text and len(text) > 3:
-                films_method3.append(text)
-                print(f"  - {text} -> {href}")
-        
-        print(f"Totale film metodo 3: {len(films_method3)}")
-        print()
-        
-        # METODO 4: Cerca nelle immagini con alt text
-        print("=== METODO 4: Immagini con alt text ===")
-        images = soup.find_all('img', alt=True)
-        print(f"Immagini con alt trovate: {len(images)}")
-        
-        films_method4 = []
-        for img in images:
-            alt_text = img.get('alt', '').strip()
-            if alt_text and len(alt_text) > 3 and alt_text != 'Poster':
-                films_method4.append(alt_text)
-                print(f"  - {alt_text}")
-        
-        print(f"Totale film metodo 4: {len(films_method4[:20])}")
-        print()
-        
-        # Combina tutti i film trovati
-        all_films = list(set(films_method1 + films_method2 + films_method3 + films_method4))
-        print(f"=== TOTALE FILM UNICI TROVATI: {len(all_films)} ===")
-        
-        # Ora cerca i nostri film target
-        print("\n=== RICERCA FILM TARGET ===")
-        for target in target_films:
-            print(f"\nCerco: '{target}'")
+        if not self.telegram_bot_token or not self.telegram_chat_id:
+            print("Telegram not configured, printing results instead")
+            self.print_matches(matches)
+            return
             
-            # Cerca match esatti
-            exact_matches = [film for film in all_films if target.lower() in film.lower()]
-            if exact_matches:
-                print(f"  MATCH ESATTI:")
-                for match in exact_matches:
-                    print(f"    - {match}")
+        if not matches:
+            message = "Nessun film della tua watchlist è attualmente in programmazione a Roma"
+        else:
+            message = f"FILM TROVATI A ROMA! ({len(matches)} match)\n\n"
             
-            # Cerca match simili
-            similar_matches = []
-            for film in all_films:
-                similarity = difflib.SequenceMatcher(None, target.lower(), film.lower()).ratio()
-                if similarity > 0.5:  # Soglia bassa per vedere tutto
-                    similar_matches.append((film, similarity))
+            for i, match in enumerate(matches, 1):
+                film = match['watchlist_film']['title']
+                cinema_title = match['cinema_film']['title']
+                score = match['match_score']
+                
+                message += f"{i}. {film}\n"
+                message += f"   Trovato come: {cinema_title}\n"
+                message += f"   Match: {score:.0%}\n"
+                
+                search_query = cinema_title.replace(' ', '+')
+                google_search = f"https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+orari+2025"
+                message += f"   Cerca programmazione: {google_search}\n\n"
+                
+            message += f"Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}"
             
-            if similar_matches:
-                print(f"  MATCH SIMILI (>50%):")
-                for film, score in sorted(similar_matches, key=lambda x: x[1], reverse=True)[:5]:
-                    print(f"    - {film} ({score:.0%})")
+        try:
+            print("Sending Telegram message...")
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            payload = {
+                'chat_id': self.telegram_chat_id,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            print("Telegram notification sent successfully!")
             
-            if not exact_matches and not similar_matches:
-                print(f"  NESSUN MATCH trovato per '{target}'")
+        except Exception as e:
+            print(f"Error sending Telegram notification: {e}")
+            self.print_matches(matches)
+    
+    def print_matches(self, matches):
+        """Stampa i risultati sulla console"""
+        print("\n" + "="*50)
+        print("RISULTATI CONTROLLO CINEMA")
+        print("="*50)
         
-        print("\n=== SAMPLE DI TUTTI I FILM TROVATI ===")
-        for i, film in enumerate(sorted(all_films)[:30]):
-            print(f"{i+1:2d}. {film}")
-        
-        if len(all_films) > 30:
-            print(f"... e altri {len(all_films) - 30} film")
+        if not matches:
+            print("Nessun film della tua watchlist è attualmente in programmazione a Roma")
+        else:
+            print(f"TROVATI {len(matches)} FILM DELLA TUA WATCHLIST!")
+            print()
             
-    except Exception as e:
-        print(f"ERRORE: {e}")
-        import traceback
-        traceback.print_exc()
+            for i, match in enumerate(matches, 1):
+                film = match['watchlist_film']['title']
+                cinema_title = match['cinema_film']['title']
+                score = match['match_score']
+                
+                print(f"{i}. Film cercato: {film}")
+                print(f"   Trovato come: {cinema_title}")
+                print(f"   Match: {score:.0%}")
+                print(f"   Fonte: {match['cinema_film']['cinema_info']['source_name']}")
+                
+                search_query = cinema_title.replace(' ', '+')
+                print(f"   Cerca programmazione: https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+orari")
+                print()
+        
+        print(f"Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
+        print("="*50)
+    
+    def run(self):
+        """Metodo principale per eseguire il controllo"""
+        print("Avvio controllo cinema per watchlist...")
+        
+        try:
+            # 1. Ottieni film dalla watchlist (per ora hardcoded per test)
+            print("\nRecupero watchlist...")
+            watchlist_films = self.get_watchlist_films()
+            
+            if not watchlist_films:
+                print("Nessun film trovato nella watchlist")
+                return
+            
+            print(f"Trovati {len(watchlist_films)} film nella watchlist")
+            
+            # 2. Ottieni film dai cinema di Roma
+            print("\nRecupero programmazione cinema Roma...")
+            cinema_films = self.get_roma_cinema_films()
+            
+            if not cinema_films:
+                print("Nessun film trovato nei cinema di Roma")
+                return
+            
+            print(f"Trovati {len(cinema_films)} film nei cinema")
+            
+            # 3. Trova corrispondenze
+            print("\nRicerca corrispondenze...")
+            matches = self.find_matches(watchlist_films, cinema_films)
+            
+            # 4. Invia notifica
+            print("\nInvio notifica...")
+            self.send_telegram_notification(matches)
+            
+            print("Controllo completato!")
+            
+        except Exception as e:
+            print(f"Errore durante l'esecuzione: {e}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
-    debug_comingsoon_scraping()
+    checker = CinemaWatchlistChecker()
+    checker.run()

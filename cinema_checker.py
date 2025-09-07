@@ -200,113 +200,110 @@ class CinemaWatchlistChecker:
             print(f"Sample Roma films: {sample_titles}")
         
         return final_films
-    
 
     def extract_comingsoon_films(self, soup, source_url):
-    """Estrae film specificamente da ComingSoon.it basandosi sull'HTML fornito"""
-    films = []
-    
-    try:
-        print("Extracting films from ComingSoon using new method...")
+        """Estrae film specificamente da ComingSoon.it basandosi sull'HTML fornito"""
+        films = []
         
-        # Metodo specifico per la struttura HTML mostrata
-        # Cerca i div con classe "header-scheda streaming min no-bg container-fluid pbm"
-        film_containers = soup.find_all('div', class_='header-scheda streaming min no-bg container-fluid pbm')
-        
-        print(f"Found {len(film_containers)} film containers")
-        
-        for container in film_containers:
-            try:
-                # Cerca il titolo nel link con classe "tit_olo h1"
-                title_link = container.find('a', class_='tit_olo h1')
-                
-                if title_link:
-                    film_title = title_link.get_text(strip=True)
+        try:
+            print("Extracting films from ComingSoon using new method...")
+            
+            # Metodo specifico per la struttura HTML mostrata
+            # Cerca i div con classe "header-scheda streaming min no-bg container-fluid pbm"
+            film_containers = soup.find_all('div', class_='header-scheda streaming min no-bg container-fluid pbm')
+            
+            print(f"Found {len(film_containers)} film containers")
+            
+            for container in film_containers:
+                try:
+                    # Cerca il titolo nel link con classe "tit_olo h1"
+                    title_link = container.find('a', class_='tit_olo h1')
                     
-                    # Filtra titoli troppo corti o che sembrano non essere film
-                    if len(film_title) > 3 and len(film_title) < 100:
-                        # Verifica che non sia un elemento del sito
-                        title_lower = film_title.lower()
-                        skip_words = [
-                            'home', 'contatti', 'cinema', 'orari', 'prezzi', 'info', 'roma',
-                            'calendario', 'boxoffice', 'collezioni', 'video', 'recensioni', 
-                            'news', 'interviste', 'trailer', 'foto', 'cast', 'trama'
-                        ]
+                    if title_link:
+                        film_title = title_link.get_text(strip=True)
                         
-                        if not any(word in title_lower for word in skip_words):
-                            # Estrai informazioni aggiuntive
-                            genre_elem = container.find('div', class_='p')
-                            genre = ""
-                            if genre_elem and 'Genere:' in genre_elem.get_text():
-                                genre = genre_elem.find('span').get_text(strip=True) if genre_elem.find('span') else ""
+                        # Filtra titoli troppo corti o che sembrano non essere film
+                        if len(film_title) > 3 and len(film_title) < 100:
+                            # Verifica che non sia un elemento del sito
+                            title_lower = film_title.lower()
+                            skip_words = [
+                                'home', 'contatti', 'cinema', 'orari', 'prezzi', 'info', 'roma',
+                                'calendario', 'boxoffice', 'collezioni', 'video', 'recensioni', 
+                                'news', 'interviste', 'trailer', 'foto', 'cast', 'trama'
+                            ]
                             
-                            # Ottieni URL del film se disponibile
-                            film_url = title_link.get('href', '') if title_link else ''
-                            if film_url and not film_url.startswith('http'):
-                                film_url = 'https://www.comingsoon.it' + film_url
-                            
-                            films.append({
-                                'title': film_title,
-                                'source': source_url,
-                                'genre': genre,
-                                'cinema_info': {
-                                    'search_url': source_url,
-                                    'source_name': 'ComingSoon',
-                                    'film_url': film_url
-                                }
-                            })
-                            
-                            print(f"  Found film: {film_title} ({genre})")
-                            
-            except Exception as e:
-                print(f"Error processing film container: {e}")
-                continue
+                            if not any(word in title_lower for word in skip_words):
+                                # Estrai informazioni aggiuntive
+                                genre_elem = container.find('div', class_='p')
+                                genre = ""
+                                if genre_elem and 'Genere:' in genre_elem.get_text():
+                                    genre = genre_elem.find('span').get_text(strip=True) if genre_elem.find('span') else ""
+                                
+                                # Ottieni URL del film se disponibile
+                                film_url = title_link.get('href', '') if title_link else ''
+                                if film_url and not film_url.startswith('http'):
+                                    film_url = 'https://www.comingsoon.it' + film_url
+                                
+                                films.append({
+                                    'title': film_title,
+                                    'source': source_url,
+                                    'genre': genre,
+                                    'cinema_info': {
+                                        'search_url': source_url,
+                                        'source_name': 'ComingSoon',
+                                        'film_url': film_url
+                                    }
+                                })
+                                
+                                print(f"  Found film: {film_title} ({genre})")
+                                
+                except Exception as e:
+                    print(f"Error processing film container: {e}")
+                    continue
+            
+            # Se il metodo specifico non funziona, usa il metodo di fallback
+            if len(films) < 5:
+                print("Using fallback method...")
+                films.extend(self.extract_comingsoon_fallback(soup, source_url))
+            
+        except Exception as e:
+            print(f"Error extracting from ComingSoon: {e}")
         
-        # Se il metodo specifico non funziona, usa il metodo di fallback
-        if len(films) < 5:
-            print("Using fallback method...")
-            films.extend(self.extract_comingsoon_fallback(soup, source_url))
-        
-    except Exception as e:
-        print(f"Error extracting from ComingSoon: {e}")
-    
-    print(f"Total films extracted: {len(films)}")
-    return films
+        print(f"Total films extracted: {len(films)}")
+        return films
 
     def extract_comingsoon_fallback(self, soup, source_url):
-    """Metodo di fallback per estrarre film"""
-    films = []
-    
-    try:
-        # Cerca tutti i titoli H1, H2, H3 che potrebbero essere film
-        for heading in soup.find_all(['h1', 'h2', 'h3']):
-            text = heading.get_text(strip=True)
-            
-            # Filtra elementi che sembrano titoli di film
-            if (5 < len(text) < 80 and 
-                not any(skip in text.lower() for skip in [
-                    'programmazione', 'cinema', 'roma', 'orari', 'today',
-                    'news', 'trailer', 'cast', 'foto', 'video'
-                ])):
+        """Metodo di fallback per estrarre film"""
+        films = []
+        
+        try:
+            # Cerca tutti i titoli H1, H2, H3 che potrebbero essere film
+            for heading in soup.find_all(['h1', 'h2', 'h3']):
+                text = heading.get_text(strip=True)
                 
-                films.append({
-                    'title': text,
-                    'source': source_url,
-                    'cinema_info': {
-                        'search_url': source_url,
-                        'source_name': 'ComingSoon-Fallback'
-                    }
-                })
-                
-                if len(films) >= 20:  # Limita i risultati del fallback
-                    break
+                # Filtra elementi che sembrano titoli di film
+                if (5 < len(text) < 80 and 
+                    not any(skip in text.lower() for skip in [
+                        'programmazione', 'cinema', 'roma', 'orari', 'today',
+                        'news', 'trailer', 'cast', 'foto', 'video'
+                    ])):
                     
-    except Exception as e:
-        print(f"Error in fallback extraction: {e}")
-    
-    return films
-
-    
+                    films.append({
+                        'title': text,
+                        'source': source_url,
+                        'cinema_info': {
+                            'search_url': source_url,
+                            'source_name': 'ComingSoon-Fallback'
+                        }
+                    })
+                    
+                    if len(films) >= 20:  # Limita i risultati del fallback
+                        break
+                        
+        except Exception as e:
+            print(f"Error in fallback extraction: {e}")
+        
+        return films
     
     def find_matches(self, watchlist_films, cinema_films):
         """Trova corrispondenze tra watchlist e cinema usando titoli multipli"""
@@ -472,9 +469,9 @@ class CinemaWatchlistChecker:
         print("="*50)
         
         if not matches:
-            print("❌ Nessun film della tua watchlist è attualmente in programmazione a Roma")
+            print("Nessun film della tua watchlist è attualmente in programmazione a Roma")
         else:
-            print(f"✅ TROVATI {len(matches)} FILM DELLA TUA WATCHLIST!")
+            print(f"TROVATI {len(matches)} FILM DELLA TUA WATCHLIST!")
             print()
             
             for i, match in enumerate(matches, 1):
@@ -482,58 +479,58 @@ class CinemaWatchlistChecker:
                 cinema_title = match['cinema_film']['title']
                 score = match['match_score']
                 
-                print(f"{i}. 🎬 {film}")
-                print(f"   📽️  Match: {cinema_title} ({score:.0%})")
-                print(f"   🏢 Fonte: {match['cinema_film']['cinema_info']['source_name']}")
+                print(f"{i}. Film: {film}")
+                print(f"   Match: {cinema_title} ({score:.0%})")
+                print(f"   Fonte: {match['cinema_film']['cinema_info']['source_name']}")
                 
                 search_query = film.replace(' ', '+')
-                print(f"   🔍 Cerca programmazione: https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+orari")
+                print(f"   Cerca programmazione: https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+orari")
                 print()
         
-        print(f"⏰ Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
+        print(f"Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
         print("="*50)
     
     def run(self):
         """Metodo principale per eseguire il controllo"""
-        print("🎬 Avvio controllo cinema per watchlist Letterboxd...")
+        print("Avvio controllo cinema per watchlist Letterboxd...")
         
         try:
             # 1. Ottieni film dalla watchlist
-            print("\n📋 Recupero watchlist...")
+            print("\nRecupero watchlist...")
             watchlist_films = self.get_watchlist_films()
             
             if not watchlist_films:
-                print("❌ Nessun film trovato nella watchlist")
+                print("Nessun film trovato nella watchlist")
                 return
             
-            print(f"✅ Trovati {len(watchlist_films)} film nella watchlist")
+            print(f"Trovati {len(watchlist_films)} film nella watchlist")
             
             # 2. Ottieni film dai cinema di Roma
-            print("\n🏢 Recupero programmazione cinema Roma...")
+            print("\nRecupero programmazione cinema Roma...")
             cinema_films = self.get_roma_cinema_films()
             
             if not cinema_films:
-                print("❌ Nessun film trovato nei cinema di Roma")
+                print("Nessun film trovato nei cinema di Roma")
                 return
             
-            print(f"✅ Trovati {len(cinema_films)} film nei cinema")
+            print(f"Trovati {len(cinema_films)} film nei cinema")
             
             # 3. Trova corrispondenze
-            print("\n🔍 Ricerca corrispondenze...")
+            print("\nRicerca corrispondenze...")
             matches = self.find_matches(watchlist_films, cinema_films)
             
             # 4. Invia notifica
-            print("\n📱 Invio notifica...")
+            print("\nInvio notifica...")
             self.send_telegram_notification(matches)
             
-            print("✅ Controllo completato!")
+            print("Controllo completato!")
             
         except Exception as e:
-            print(f"❌ Errore durante l'esecuzione: {e}")
+            print(f"Errore durante l'esecuzione: {e}")
             # Notifica errore via Telegram se configurato
             if self.telegram_bot_token and self.telegram_chat_id:
                 try:
-                    error_message = f"❌ Errore nel controllo cinema:\n\n{str(e)}\n\nData: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    error_message = f"Errore nel controllo cinema:\n\n{str(e)}\n\nData: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
                     payload = {
                         'chat_id': self.telegram_chat_id,

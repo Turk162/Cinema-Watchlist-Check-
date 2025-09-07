@@ -202,7 +202,7 @@ class CinemaWatchlistChecker:
         return final_films
     
 
-def extract_comingsoon_films(self, soup, source_url):
+    def extract_comingsoon_films(self, soup, source_url):
     """Estrae film specificamente da ComingSoon.it basandosi sull'HTML fornito"""
     films = []
     
@@ -273,7 +273,7 @@ def extract_comingsoon_films(self, soup, source_url):
     print(f"Total films extracted: {len(films)}")
     return films
 
-def extract_comingsoon_fallback(self, soup, source_url):
+    def extract_comingsoon_fallback(self, soup, source_url):
     """Metodo di fallback per estrarre film"""
     films = []
     

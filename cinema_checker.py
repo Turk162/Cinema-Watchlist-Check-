@@ -431,83 +431,83 @@ class CinemaWatchlistChecker:
             print(f"Error sending Telegram notification: {e}")
             self.print_matches(matches)
     
-def print_matches(self, matches):
-    """Stampa i risultati sulla console"""
-    print("\n" + "="*50)
-    print("RISULTATI CONTROLLO CINEMA")
-    print("="*50)
-    
-    if not matches:
-        print("❌ Nessun film della tua watchlist è attualmente in programmazione a Roma")
-    else:
-        print(f"✅ TROVATI {len(matches)} FILM DELLA TUA WATCHLIST!")
-        print()
+    def print_matches(self, matches):
+        """Stampa i risultati sulla console"""
+        print("\n" + "="*50)
+        print("RISULTATI CONTROLLO CINEMA")
+        print("="*50)
         
-        for i, match in enumerate(matches, 1):
-            film = match['watchlist_film']['title']
-            cinema_title = match['cinema_film']['title']
-            score = match['match_score']
-            
-            print(f"{i}. 🎬 {film}")
-            print(f"   📽️  Match: {cinema_title} ({score:.0%})")
-            print(f"   🏢 Fonte: {match['cinema_film']['cinema_info']['source_name']}")
-            
-            search_query = film.replace(' ', '+')
-            print(f"   🔍 Cerca programmazione: https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+orari")
+        if not matches:
+            print("❌ Nessun film della tua watchlist è attualmente in programmazione a Roma")
+        else:
+            print(f"✅ TROVATI {len(matches)} FILM DELLA TUA WATCHLIST!")
             print()
+            
+            for i, match in enumerate(matches, 1):
+                film = match['watchlist_film']['title']
+                cinema_title = match['cinema_film']['title']
+                score = match['match_score']
+                
+                print(f"{i}. 🎬 {film}")
+                print(f"   📽️  Match: {cinema_title} ({score:.0%})")
+                print(f"   🏢 Fonte: {match['cinema_film']['cinema_info']['source_name']}")
+                
+                search_query = film.replace(' ', '+')
+                print(f"   🔍 Cerca programmazione: https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+orari")
+                print()
+        
+        print(f"⏰ Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
+        print("="*50)
     
-    print(f"⏰ Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
-    print("="*50)
-
-def run(self):
-    """Metodo principale per eseguire il controllo"""
-    print("🎬 Avvio controllo cinema per watchlist Letterboxd...")
-    
-    try:
-        # 1. Ottieni film dalla watchlist
-        print("\n📋 Recupero watchlist...")
-        watchlist_films = self.get_watchlist_films()
+    def run(self):
+        """Metodo principale per eseguire il controllo"""
+        print("🎬 Avvio controllo cinema per watchlist Letterboxd...")
         
-        if not watchlist_films:
-            print("❌ Nessun film trovato nella watchlist")
-            return
-        
-        print(f"✅ Trovati {len(watchlist_films)} film nella watchlist")
-        
-        # 2. Ottieni film dai cinema di Roma
-        print("\n🏢 Recupero programmazione cinema Roma...")
-        cinema_films = self.get_roma_cinema_films()
-        
-        if not cinema_films:
-            print("❌ Nessun film trovato nei cinema di Roma")
-            return
-        
-        print(f"✅ Trovati {len(cinema_films)} film nei cinema")
-        
-        # 3. Trova corrispondenze
-        print("\n🔍 Ricerca corrispondenze...")
-        matches = self.find_matches(watchlist_films, cinema_films)
-        
-        # 4. Invia notifica
-        print("\n📱 Invio notifica...")
-        self.send_telegram_notification(matches)
-        
-        print("✅ Controllo completato!")
-        
-    except Exception as e:
-        print(f"❌ Errore durante l'esecuzione: {e}")
-        # Notifica errore via Telegram se configurato
-        if self.telegram_bot_token and self.telegram_chat_id:
-            try:
-                error_message = f"❌ Errore nel controllo cinema:\n\n{str(e)}\n\nData: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
-                payload = {
-                    'chat_id': self.telegram_chat_id,
-                    'text': error_message
-                }
-                requests.post(url, json=payload, timeout=5)
-            except:
-                pass
+        try:
+            # 1. Ottieni film dalla watchlist
+            print("\n📋 Recupero watchlist...")
+            watchlist_films = self.get_watchlist_films()
+            
+            if not watchlist_films:
+                print("❌ Nessun film trovato nella watchlist")
+                return
+            
+            print(f"✅ Trovati {len(watchlist_films)} film nella watchlist")
+            
+            # 2. Ottieni film dai cinema di Roma
+            print("\n🏢 Recupero programmazione cinema Roma...")
+            cinema_films = self.get_roma_cinema_films()
+            
+            if not cinema_films:
+                print("❌ Nessun film trovato nei cinema di Roma")
+                return
+            
+            print(f"✅ Trovati {len(cinema_films)} film nei cinema")
+            
+            # 3. Trova corrispondenze
+            print("\n🔍 Ricerca corrispondenze...")
+            matches = self.find_matches(watchlist_films, cinema_films)
+            
+            # 4. Invia notifica
+            print("\n📱 Invio notifica...")
+            self.send_telegram_notification(matches)
+            
+            print("✅ Controllo completato!")
+            
+        except Exception as e:
+            print(f"❌ Errore durante l'esecuzione: {e}")
+            # Notifica errore via Telegram se configurato
+            if self.telegram_bot_token and self.telegram_chat_id:
+                try:
+                    error_message = f"❌ Errore nel controllo cinema:\n\n{str(e)}\n\nData: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+                    payload = {
+                        'chat_id': self.telegram_chat_id,
+                        'text': error_message
+                    }
+                    requests.post(url, json=payload, timeout=5)
+                except:
+                    pass
 
 if __name__ == "__main__":
     checker = CinemaWatchlistChecker()

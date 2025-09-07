@@ -63,7 +63,7 @@ class CinemaWatchlistChecker:
         return self.get_watchlist_from_web()
     
     def get_watchlist_from_web(self):
-        """Scrapa la watchlist direttamente dalla pagina web"""
+        """Scrapa la watchlist direttamente dalla pagina web con titoli multipli"""
         try:
             username = self.letterboxd_rss.split('/')[-3] if 'letterboxd.com' in self.letterboxd_rss else 'guidaccio'
             watchlist_url = f"https://letterboxd.com/{username}/watchlist/"
@@ -78,33 +78,185 @@ class CinemaWatchlistChecker:
             soup = BeautifulSoup(response.content, 'html.parser')
             films = []
             
-            # Cerca i poster dei film (pattern tipico di Letterboxd)
-            for img in soup.find_all('img', alt=True):
-                alt_text = img.get('alt', '')
-                if alt_text and alt_text != 'Poster':
-                    # Pulisci il titolo dall'alt text
-                    clean_title = re.sub(r'\s+\(\d{4}\).*$', '', alt_text)
-                    if clean_title and len(clean_title) > 1:
-                        films.append({
-                            'title': clean_title.strip(),
-                            'original_title': alt_text,
-                            'url': watchlist_url
-                        })
+            print("🔍 Looking for film containers with multiple titles...")
             
-            # Rimuovi duplicati
-            seen = set()
-            unique_films = []
-            for film in films:
-                if film['title'] not in seen:
-                    seen.add(film['title'])
-                    unique_films.append(film)
+            # Pattern 1: Cerca container di film con poster
+            film_containers = soup.find_all(['li', 'div'], class_=re.compile(r'(poster|film|movie)', re.I))
             
-            print(f"✅ Found {len(unique_films)} films via web scraping")
-            return unique_films[:20]  # Limita per test
+            for container in film_containers:
+                film_titles = self.extract_multiple_titles_from_container(container)
+                if film_titles:
+                    films.append(film_titles)
+                    print(f"📽️ Found: {film_titles}")
+            
+            # Pattern 2: Cerca nelle immagini con alt text
+            if len(films) < 5:  # Se non trova abbastanza film, usa il metodo classico
+                print("🔄 Fallback to image alt text method...")
+                for img in soup.find_all('img', alt=True):
+                    alt_text = img.get('alt', '')
+                    if alt_text and alt_text != 'Poster' and len(alt_text) > 3:
+                        # Cerca titoli multipli nel context dell'immagine
+                        film_titles = self.extract_titles_from_context(img, alt_text)
+                        if film_titles and film_titles not in films:
+                            films.append(film_titles)
+            
+            # Pattern 3: Cerca in base alla struttura HTML tipica di Letterboxd
+            print("🔍 Looking for Letterboxd-specific structures...")
+            title_links = soup.find_all('a', href=re.compile(r'/film/'))
+            
+            for link in title_links:
+                if link.get_text(strip=True):
+                    film_titles = self.extract_titles_from_link_context(link)
+                    if film_titles and film_titles not in films:
+                        films.append(film_titles)
+            
+            print(f"✅ Found {len(films)} films via enhanced web scraping")
+            print(f"📋 Sample films: {films[:3]}")
+            
+            return films[:30]  # Limita per performance
             
         except Exception as e:
             print(f"❌ Error scraping watchlist: {e}")
             return []
+    
+    def extract_multiple_titles_from_container(self, container):
+        """Estrae titoli multipli da un container di film"""
+        try:
+            # Cerca il titolo principale
+            main_title = None
+            alt_titles = []
+            
+            # 1. Cerca negli attributi alt delle immagini
+            img = container.find('img', alt=True)
+            if img:
+                main_title = img.get('alt', '').strip()
+            
+            # 2. Cerca nei link al film
+            film_link = container.find('a', href=re.compile(r'/film/'))
+            if film_link and film_link.get_text(strip=True):
+                potential_title = film_link.get_text(strip=True)
+                if not main_title:
+                    main_title = potential_title
+                elif potential_title != main_title:
+                    alt_titles.append(potential_title)
+            
+            # 3. Cerca sottotitoli/titoli originali
+            # Cerca elementi con testo in corsivo o classi che indicano titoli alternativi
+            subtitle_elements = container.find_all(['em', 'i', 'span'], string=re.compile(r'^[A-Za-z0-9À-ÿ\s\-:,\.\'\"]+$'))
+            
+            for element in subtitle_elements:
+                text = element.get_text(strip=True)
+                if text and len(text) > 3 and text not in [main_title] + alt_titles:
+                    # Filtra testi che sembrano titoli di film
+                    if not any(word in text.lower() for word in ['directed', 'starring', 'runtime', 'year', 'genre']):
+                        alt_titles.append(text)
+            
+            # 4. Cerca negli elementi h1, h2, h3 nel container
+            title_elements = container.find_all(['h1', 'h2', 'h3', 'h4'])
+            for element in title_elements:
+                text = element.get_text(strip=True)
+                if text and len(text) > 3 and text not in [main_title] + alt_titles:
+                    alt_titles.append(text)
+            
+            # Pulisci e filtra i titoli
+            if main_title:
+                main_title = self.clean_title(main_title)
+                clean_alt_titles = [self.clean_title(title) for title in alt_titles if self.clean_title(title)]
+                
+                # Rimuovi duplicati e titoli troppo simili
+                final_alt_titles = []
+                for alt_title in clean_alt_titles:
+                    if len(alt_title) > 3 and alt_title != main_title:
+                        # Controlla che non sia troppo simile al titolo principale
+                        similarity = difflib.SequenceMatcher(None, main_title.lower(), alt_title.lower()).ratio()
+                        if similarity < 0.9:  # Se è diverso abbastanza
+                            final_alt_titles.append(alt_title)
+                
+                result = {
+                    'title': main_title,
+                    'original_title': main_title,
+                    'alternative_titles': final_alt_titles[:3],  # Max 3 titoli alternativi
+                    'url': watchlist_url
+                }
+                
+                return result
+                
+        except Exception as e:
+            print(f"Warning: Error extracting titles from container: {e}")
+        
+        return None
+    
+    def extract_titles_from_context(self, img, alt_text):
+        """Estrae titoli dal contesto di un'immagine"""
+        try:
+            main_title = self.clean_title(alt_text)
+            if not main_title or len(main_title) < 3:
+                return None
+            
+            # Cerca nel parent element per sottotitoli
+            alt_titles = []
+            parent = img.parent
+            if parent:
+                # Cerca testo nelle vicinanze che potrebbe essere un titolo alternativo
+                for sibling in parent.find_all(string=True):
+                    text = sibling.strip()
+                    if text and len(text) > 3 and text != main_title:
+                        clean_text = self.clean_title(text)
+                        if clean_text and clean_text != main_title:
+                            alt_titles.append(clean_text)
+            
+            return {
+                'title': main_title,
+                'original_title': main_title,
+                'alternative_titles': alt_titles[:2],
+                'url': watchlist_url
+            }
+            
+        except Exception as e:
+            print(f"Warning: Error extracting from context: {e}")
+            return None
+    
+    def extract_titles_from_link_context(self, link):
+        """Estrae titoli dal contesto di un link"""
+        try:
+            main_title = self.clean_title(link.get_text(strip=True))
+            if not main_title or len(main_title) < 3:
+                return None
+            
+            # Cerca nel data attributes del link o parent
+            alt_titles = []
+            
+            # Cerca negli attributi data-*
+            for attr_name, attr_value in link.attrs.items():
+                if attr_name.startswith('data-') and isinstance(attr_value, str):
+                    potential_title = self.clean_title(attr_value)
+                    if potential_title and potential_title != main_title and len(potential_title) > 3:
+                        alt_titles.append(potential_title)
+            
+            return {
+                'title': main_title,
+                'original_title': main_title,
+                'alternative_titles': alt_titles[:2],
+                'url': watchlist_url
+            }
+            
+        except Exception as e:
+            print(f"Warning: Error extracting from link context: {e}")
+            return None
+    
+    def clean_title(self, title):
+        """Pulisce un titolo rimuovendo info extra"""
+        if not title:
+            return ""
+            
+        # Rimuovi anno
+        clean = re.sub(r'\s+\(\d{4}\).*$', '', title)
+        # Rimuovi info extra dopo trattini
+        clean = re.sub(r'\s*[–—-]\s*(directed|starring|runtime).*$', '', clean, flags=re.I)
+        # Rimuovi spazi multipli
+        clean = re.sub(r'\s+', ' ', clean)
+        
+        return clean.strip()
     
     def get_roma_cinema_films(self):
         """Scrapa i film in programmazione a Roma da ComingSoon.it"""
@@ -282,155 +434,4 @@ class CinemaWatchlistChecker:
                                 }
                             })
                             
-        except Exception as e:
-            print(f"Error in generic extraction: {e}")
-        
-        return films[:100]  # Limita per sicurezza
-    
-    def find_matches(self, watchlist_films, cinema_films):
-        """Trova corrispondenze tra watchlist e cinema"""
-        matches = []
-        
-        print("🔍 Looking for matches...")
-        print(f"📋 Watchlist films: {[f['title'] for f in watchlist_films[:5]]}...")
-        print(f"🎬 Cinema films: {[f['title'] for f in cinema_films[:5]]}...")
-        
-        for watchlist_film in watchlist_films:
-            watchlist_title = watchlist_film['title'].lower()
-            
-            for cinema_film in cinema_films:
-                cinema_title = cinema_film['title'].lower()
-                
-                # Matching esatto
-                if watchlist_title == cinema_title:
-                    matches.append({
-                        'watchlist_film': watchlist_film,
-                        'cinema_film': cinema_film,
-                        'match_score': 1.0,
-                        'match_type': 'exact'
-                    })
-                    print(f"🎯 Exact match: {watchlist_title}")
-                    continue
-                
-                # Fuzzy matching
-                similarity = difflib.SequenceMatcher(None, watchlist_title, cinema_title).ratio()
-                if similarity > 0.8:  # 80% di similarità per test
-                    matches.append({
-                        'watchlist_film': watchlist_film,
-                        'cinema_film': cinema_film,
-                        'match_score': similarity,
-                        'match_type': 'fuzzy'
-                    })
-                    print(f"🎯 Fuzzy match: {watchlist_title} ~ {cinema_title} ({similarity:.0%})")
-        
-        print(f"✅ Total matches found: {len(matches)}")
-        return matches
-    
-    def send_telegram_notification(self, matches):
-        """Invia notifica Telegram"""
-        print("📱 Preparing Telegram notification...")
-        
-        if not self.telegram_bot_token or not self.telegram_chat_id:
-            print("⚠️ Telegram not configured, printing results instead")
-            self.print_matches(matches)
-            return
-            
-        if not matches:
-            message = "🎭 Nessun film della tua watchlist è attualmente in programmazione a Roma"
-        else:
-            message = f"🎬 FILM TROVATI A ROMA! ({len(matches)} match)\n\n"
-            
-            for i, match in enumerate(matches, 1):
-                film = match['watchlist_film']['title']
-                score = match['match_score']
-                
-                message += f"{i}. 🎞️ <b>{film}</b>\n"
-                message += f"   🎯 Match: {score:.0%}\n"
-                message += f"   📍 ComingSoon Cinema\n"
-                
-                # Solo link Google per cercare programmazione
-                search_query = film.replace(' ', '+')
-                google_search = f"https://www.google.com/search?q={search_query}+cinema+Roma+programmazione+orari+2025"
-                message += f"   🔍 <a href='{google_search}'>Cerca programmazione</a>\n\n"
-                
-            message += f"🗓️ Controllato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}"
-            
-        try:
-            print("📤 Sending Telegram message...")
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
-            payload = {
-                'chat_id': self.telegram_chat_id,
-                'text': message,
-                'parse_mode': 'HTML'
-            }
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status()
-            print("✅ Telegram notification sent successfully!")
-            
-        except Exception as e:
-            print(f"❌ Error sending Telegram notification: {e}")
-            self.print_matches(matches)
-    
-    def print_matches(self, matches):
-        """Stampa i risultati sulla console"""
-        print("\n" + "="*50)
-        print("🎬 RISULTATI TEST CINEMA ROMA")
-        print("="*50)
-        
-        if not matches:
-            print("❌ Nessun film della watchlist trovato")
-        else:
-            print(f"✅ Trovati {len(matches)} film:")
-            for i, match in enumerate(matches, 1):
-                film = match['watchlist_film']['title']
-                score = match['match_score']
-                print(f"\n{i}. {film}")
-                print(f"   Match: {score:.0%}")
-                
-        print(f"\n🕒 Test eseguito il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
-        print("="*50)
-    
-    def run(self):
-        """Esegue il controllo completo - versione debug"""
-        print("🚀 Starting cinema watchlist checker (DEBUG VERSION)...")
-        
-        try:
-            # 1. Ottieni film dalla watchlist
-            print("\n📋 STEP 1: Getting watchlist...")
-            watchlist_films = self.get_watchlist_films()
-            if not watchlist_films:
-                print("❌ No films found in watchlist")
-                # Invia comunque notifica
-                self.send_telegram_notification([])
-                return
-                
-            # 2. Ottieni film in programmazione (versione REALE)
-            print("\n🎬 STEP 2: Getting cinema films...")
-            cinema_films = self.get_roma_cinema_films()
-            
-            # 3. Trova corrispondenze
-            print("\n🔍 STEP 3: Finding matches...")
-            matches = self.find_matches(watchlist_films, cinema_films)
-            
-            # 4. Invia notifica
-            print("\n📱 STEP 4: Sending notification...")
-            self.send_telegram_notification(matches)
-            
-            print("\n✅ Debug check completed successfully!")
-            
-        except Exception as e:
-            print(f"💥 FATAL ERROR: {e}")
-            import traceback
-            traceback.print_exc()
-
-if __name__ == "__main__":
-    print("🎬 Cinema Watchlist Checker - DEBUG VERSION")
-    print("=" * 50)
-    
-    try:
-        checker = CinemaWatchlistChecker()
-        checker.run()
-    except Exception as e:
-        print(f"💥 SCRIPT FAILED: {e}")
-        import traceback
-        traceback.print_exc()
+  

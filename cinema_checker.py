@@ -4,13 +4,13 @@ Script per controllare se i film della watchlist Letterboxd
 sono in programmazione nei cinema di Roma
 """
 import requests
-import feedparser
-import re
 from bs4 import BeautifulSoup
 import difflib
 from datetime import datetime
 import os
 import string
+import time
+import re  # <-- AGGIUNGI QUESTA RIGA
 
 class CinemaWatchlistChecker:
     def __init__(self):
@@ -29,18 +29,87 @@ class CinemaWatchlistChecker:
         print(f"Letterboxd RSS: {self.letterboxd_rss}")
         
     def get_watchlist_films(self):
-        """Per test, usa una lista hardcoded di film"""
-        # Lista di test con film che sappiamo essere in sala
-        test_films = [
-            {'title': 'Warfare', 'original_title': 'Warfare', 'alternative_titles': [], 'url': ''},
-            {'title': 'I roses', 'original_title': 'I roses', 'alternative_titles': [], 'url': ''},
-            {'title': 'Enzo', 'original_title': 'Enzo', 'alternative_titles': [], 'url': ''},
-            {'title': 'Harry Potter e il calice di fuoco', 'original_title': 'Harry Potter e il calice di fuoco', 'alternative_titles': [], 'url': ''},
-            {'title': 'Kneecap', 'original_title': 'Kneecap', 'alternative_titles': [], 'url': ''}
-        ]
+        """Estrae tutti i film dalla watchlist Letterboxd via web scraping multi-pagina"""
+        try:
+            # Estrai username dall'URL
+            username = self.letterboxd_rss.split('/')[-3] if 'letterboxd.com' in self.letterboxd_rss else 'guidaccio'
+            
+            print(f"Scraping watchlist for user: {username}")
+            films = self.get_all_watchlist_films(username)
+            
+            if films:
+                # Converti in formato consistente
+                formatted_films = []
+                for film_title in films:
+                    formatted_films.append({
+                        'title': film_title,
+                        'original_title': film_title,
+                        'alternative_titles': [],
+                        'url': f'https://letterboxd.com/{username}/watchlist/'
+                    })
+                
+                print(f"Found {len(formatted_films)} films in watchlist")
+                return formatted_films
+            else:
+                print("No films found in watchlist")
+                return []
+                
+        except Exception as e:
+            print(f"Error getting watchlist: {e}")
+            return []
+    
+    def get_all_watchlist_films(self, username):
+        """Scrapa tutte le pagine della watchlist Letterboxd"""
+        films = []
+        page = 1
         
-        print(f"Using test films: {[f['title'] for f in test_films]}")
-        return test_films
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        
+        while True:
+            if page == 1:
+                url = f"https://letterboxd.com/{username}/watchlist/"
+            else:
+                url = f"https://letterboxd.com/{username}/watchlist/page/{page}/"
+                
+            print(f"  Scraping page {page}...")
+            
+            try:
+                response = requests.get(url, headers=headers, timeout=15)
+                if response.status_code != 200:
+                    print(f"  Page {page} returned {response.status_code}, stopping")
+                    break
+                    
+                soup = BeautifulSoup(response.content, 'html.parser')
+                page_films = []
+                
+                for img in soup.find_all('img', alt=True):
+                    alt_text = img.get('alt', '').strip()
+                    if (alt_text and 
+			            alt_text != 'Poster' and 
+			            alt_text.lower() != username.lower() and  # Filtra username
+			            alt_text != username and  # Filtra anche case sensitive
+			            len(alt_text) > 3 and
+			            alt_text not in films):  # Evita duplicati
+                        page_films.append(alt_text)
+                
+                if len(page_films) < 2:  # Deve trovare almeno 2 film
+                    print(f"  Found only {len(page_films)} films on page {page}, stopping")
+                    break
+                    
+                films.extend(page_films)
+                print(f"  Found {len(page_films)} films on page {page}")
+                
+
+                page += 1
+                time.sleep(0.5)  # Pausa tra richieste
+                
+            except Exception as e:
+                print(f"  Error on page {page}: {e}")
+                break
+        
+        return films
     
     def get_roma_cinema_films(self):
         """Scrapa i film in programmazione a Roma da ComingSoon.it"""
@@ -73,19 +142,19 @@ class CinemaWatchlistChecker:
         print(f"Total films from Roma: {len(all_films)}")
         
         if all_films:
-            sample_titles = [f['title'] for f in all_films[:20]]
+            sample_titles = [f['title'] for f in all_films[:10]]
             print(f"Sample Roma films: {sample_titles}")
         
         return all_films
 
     def extract_comingsoon_films(self, soup, source_url):
-        """Estrae film specificamente da ComingSoon.it usando il metodo che funziona"""
+        """Estrae film specificamente da ComingSoon.it"""
         films = []
         
         try:
             print("Extracting films from ComingSoon...")
             
-            # Usa il metodo che ha funzionato nel debug: container specifici
+            # Usa il metodo che ha funzionato: container specifici
             film_containers = soup.find_all('div', class_='header-scheda streaming min no-bg container-fluid pbm')
             
             print(f"Found {len(film_containers)} film containers")
@@ -114,8 +183,6 @@ class CinemaWatchlistChecker:
                                 }
                             })
                             
-                            print(f"  Found film: {film_title}")
-                            
                 except Exception as e:
                     print(f"Error processing film container: {e}")
                     continue
@@ -130,7 +197,7 @@ class CinemaWatchlistChecker:
         """Trova corrispondenze con matching migliorato"""
         matches = []
         
-        print("Looking for matches with improved matching...")
+        print("Looking for matches...")
         print(f"Watchlist has {len(watchlist_films)} films")
         print(f"Cinema has {len(cinema_films)} films")
         
@@ -139,7 +206,7 @@ class CinemaWatchlistChecker:
                 continue
                 
             film_display_name = watchlist_film['title']
-            print(f"\nChecking '{film_display_name}'...")
+            print(f"Checking '{film_display_name}'...")
             
             best_match = None
             best_score = 0
@@ -165,7 +232,7 @@ class CinemaWatchlistChecker:
                 # METODO 4: Matching avanzato
                 else:
                     match_score = self.advanced_title_matching(film_display_name, cinema_title)
-                    if match_score > 0.7:  # Soglia per il matching avanzato
+                    if match_score > 0.7:
                         print(f"  ADVANCED MATCH: '{film_display_name}' ~ '{cinema_title}' ({match_score:.0%})")
                 
                 # Aggiorna il best match se questo è migliore
@@ -185,10 +252,8 @@ class CinemaWatchlistChecker:
             if best_match:
                 matches.append(best_match)
                 print(f"  BEST MATCH for '{film_display_name}': {best_match['cinema_film']['title']} ({best_score:.0%})")
-            else:
-                print(f"  NO MATCH found for '{film_display_name}'")
         
-        print(f"\nTotal matches found: {len(matches)}")
+        print(f"Total matches found: {len(matches)}")
         return matches
     
     def advanced_title_matching(self, title1, title2):
@@ -266,7 +331,8 @@ class CinemaWatchlistChecker:
             payload = {
                 'chat_id': self.telegram_chat_id,
                 'text': message,
-                'parse_mode': 'HTML'
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': True
             }
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
@@ -310,7 +376,7 @@ class CinemaWatchlistChecker:
         print("Avvio controllo cinema per watchlist...")
         
         try:
-            # 1. Ottieni film dalla watchlist (per ora hardcoded per test)
+            # 1. Ottieni film dalla watchlist
             print("\nRecupero watchlist...")
             watchlist_films = self.get_watchlist_films()
             
